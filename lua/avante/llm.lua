@@ -2,8 +2,7 @@ local api = vim.api
 local fn = vim.fn
 local uv = vim.uv
 
-local curl = require("plenary.curl")
-
+local Transport = require("avante.transport")
 local Utils = require("avante.utils")
 local Config = require("avante.config")
 local Path = require("avante.path")
@@ -253,23 +252,14 @@ function M._stream(opts)
 
   local active_job
 
-  local curl_body_file = fn.tempname() .. ".json"
-  local json_content = vim.json.encode(spec.body)
-  fn.writefile(vim.split(json_content, "\n"), curl_body_file)
-
-  Utils.debug("curl body file:", curl_body_file)
-
-  local function cleanup()
-    if Config.debug then return end
-    vim.schedule(function() fn.delete(curl_body_file) end)
-  end
-
-  active_job = curl.post(spec.url, {
+  active_job = Transport.request({
+    url = spec.url,
     headers = spec.headers,
     proxy = spec.proxy,
     insecure = spec.insecure,
-    body = curl_body_file,
-    raw = spec.rawArgs,
+    body = spec.body,
+    rawArgs = spec.rawArgs,
+    transport_type = provider.transport_type,
     stream = function(err, data, _)
       if err then
         completed = true
@@ -302,26 +292,24 @@ function M._stream(opts)
           Utils.error(
             "$XDG_RUNTIME_DIR="
               .. xdg_runtime_dir
-              .. " is set but does not exist. curl could not write output. Please make sure it exists, or unset.",
+              .. " is set but does not exist. Transport could not write output. Please make sure it exists, or unset.",
             { title = "Avante" }
           )
         elseif not uv.fs_access(xdg_runtime_dir, "w") then
           Utils.error(
             "$XDG_RUNTIME_DIR="
               .. xdg_runtime_dir
-              .. " exists but is not writable. curl could not write output. Please make sure it is writable, or unset.",
+              .. " exists but is not writable. Transport could not write output. Please make sure it is writable, or unset.",
             { title = "Avante" }
           )
         end
       end
       active_job = nil
       completed = true
-      cleanup()
       handler_opts.on_stop({ reason = "error", error = err })
     end,
     callback = function(result)
       active_job = nil
-      cleanup()
       if result.status >= 400 then
         if provider.on_error then
           provider.on_error(result)
@@ -371,7 +359,7 @@ function M._stream(opts)
     callback = function()
       -- Error: cannot resume dead coroutine
       if active_job then
-        xpcall(function() active_job:shutdown() end, function(err) return err end)
+        xpcall(function() Transport.shutdown(active_job, provider.transport_type) end, function(err) return err end)
         Utils.debug("LLM request cancelled")
         active_job = nil
       end
